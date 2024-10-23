@@ -803,18 +803,26 @@ class CheckersGame:
             self.root.after(500, self.ai_move)
     
     def get_all_possible_moves(self, board, player_color):
-        all_moves = []
+        """
+        Collect all possible moves for the given player.
+        If any jumps exist, only return jumps. Otherwise, return regular moves.
+        """
+        all_jumps = []
+        all_regular_moves = []
         for row in range(self.board_size):
             for col in range(self.board_size):
                 piece = board[row][col]
                 if piece and piece["color"] == player_color:
                     jumps, regular_moves = self.get_valid_moves_on_board(board, row, col, player_color=player_color)
                     for jump in jumps:
-                        all_moves.append((row, col, jump[0], jump[1], True))
+                        all_jumps.append((row, col, jump[0], jump[1], True))
                     if not jumps:
                         for move in regular_moves:
-                            all_moves.append((row, col, move[0], move[1], False))
-        return all_moves
+                            all_regular_moves.append((row, col, move[0], move[1], False))
+        if all_jumps:
+            return all_jumps
+        else:
+            return all_regular_moves
     
     def get_valid_moves_on_board(self, board, row, col, player_color=None):
         # Similar to get_valid_moves, but operates on a given board
@@ -923,20 +931,6 @@ class CheckersGame:
             return True
         else:
             return False
-    
-    def get_all_possible_moves(self, board, player_color):
-        all_moves = []
-        for row in range(self.board_size):
-            for col in range(self.board_size):
-                piece = board[row][col]
-                if piece and piece["color"] == player_color:
-                    jumps, regular_moves = self.get_valid_moves_on_board(board, row, col, player_color=player_color)
-                    for jump in jumps:
-                        all_moves.append((row, col, jump[0], jump[1], True))
-                    if not jumps:
-                        for move in regular_moves:
-                            all_moves.append((row, col, move[0], move[1], False))
-        return all_moves
     
     def run(self):
         self.root.mainloop()
