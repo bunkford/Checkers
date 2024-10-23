@@ -26,7 +26,7 @@ class CheckersGame:
         self.redo_stack = []  # Stack to store (board, current_player) for redo functionality
         self.opponent_type = tk.StringVar(value="AI")  # Default opponent type HUMAN or AI
         self.ai_skill_level = tk.StringVar(value='Regular')  # AI Skill Level variable
-                 
+                
         # Create canvas
         canvas_size = self.board_size * self.square_size
         self.canvas = tk.Canvas(
@@ -35,7 +35,6 @@ class CheckersGame:
             height=canvas_size
         )
         self.canvas.pack()
-        
         
         # Bind click event
         self.canvas.bind('<Button-1>', self.handle_click)
@@ -182,11 +181,11 @@ class CheckersGame:
             # Jumps
             jump_row = row + 2 * d_row
             jump_col = col + 2 * d_col
-            new_row = row + d_row
-            new_col = col + d_col
+            middle_row = row + d_row
+            middle_col = col + d_col
             if (self.is_valid_position(jump_row, jump_col) and 
-                self.is_valid_position(new_row, new_col)):
-                jumped_piece = self.board[new_row][new_col]
+                self.is_valid_position(middle_row, middle_col)):
+                jumped_piece = self.board[middle_row][middle_col]
                 if (jumped_piece and 
                     jumped_piece["color"] != piece["color"] and 
                     not self.board[jump_row][jump_col]):
@@ -230,9 +229,12 @@ class CheckersGame:
             if not self.selected_piece:
                 if (row, col) not in [pos[:2] for pos in mandatory_jumps]:
                     return
-            # Ensure that if a jump is available, only jumps are allowed
-            elif (row, col) not in [pos[2:] for pos in mandatory_jumps if pos[:2] == self.selected_piece]:
-                return
+            else:
+                # If a piece is selected, ensure that the move is part of the mandatory jumps
+                from_row, from_col = self.selected_piece
+                valid_jump_positions = [ (move[2], move[3]) for move in mandatory_jumps if move[0] == from_row and move[1] == from_col ]
+                if (row, col) not in valid_jump_positions:
+                    return
         
         # If no piece is selected
         if not self.selected_piece:
@@ -250,8 +252,8 @@ class CheckersGame:
             jumps, regular_moves = self.get_valid_moves(selected_row, selected_col)
             valid_moves = jumps if jumps else regular_moves
             
-            # Ensure that if a jump is available, only jumps are allowed
-            if jumps and (row, col) not in jumps:
+            # If jumps are available, only allow jumps
+            if jumps and not self.is_jump_move(row, selected_row):
                 return
             
             # If clicked square is a valid move
@@ -270,6 +272,11 @@ class CheckersGame:
                 # Check for additional jumps
                 additional_jumps, _ = self.get_valid_moves(row, col)
                 
+                # If piece was promoted to king, update directions
+                if self.board[row][col]["king"]:
+                    # Recalculate jumps if promoted
+                    additional_jumps, _ = self.get_valid_moves(row, col)
+                
                 # Only switch players if:
                 # 1. It wasn't a jump move, or
                 # 2. It was a jump move but there are no additional jumps available
@@ -285,7 +292,7 @@ class CheckersGame:
 
                     # If opponent is AI, make an automatic move
                     if self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-                        self.root.after(500, self.ai_move())
+                        self.root.after(500, self.ai_move)
                 else:
                     # If there are additional jumps, keep the piece selected
                     self.selected_piece = (row, col)
@@ -294,6 +301,9 @@ class CheckersGame:
             
             self.selected_piece = None
             self.clear_highlights()
+    
+    def is_jump_move(self, target_row, from_row):
+        return abs(target_row - from_row) == 2
     
     def get_all_mandatory_jumps(self):
         mandatory_jumps = []
@@ -306,7 +316,7 @@ class CheckersGame:
                         for jump in jumps:
                             mandatory_jumps.append((row, col, jump[0], jump[1]))
         return mandatory_jumps
-
+    
     def move_piece(self, from_row, from_col, to_row, to_col, is_jump=False):
         # Move the piece
         piece = self.board[from_row][from_col]
@@ -426,9 +436,8 @@ class CheckersGame:
             self.ai_make_expert_move()
         else:
             self.ai_make_random_move()
-
+    
     def ai_make_random_move(self, from_row=None, from_col=None):
-        # Existing code for the AI's random move
         # Ensure it's the AI's turn
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
             return  # It's not AI's turn
@@ -503,7 +512,7 @@ class CheckersGame:
             self.reset_game()
         elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
             self.root.after(500, self.ai_move)
-
+    
     def ai_make_regular_move(self, from_row=None, from_col=None):
         # Ensure it's the AI's turn
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
@@ -536,37 +545,58 @@ class CheckersGame:
                 return
         else:
             # First move in AI's turn
+            all_jumps = []
             all_moves = []
             for row in range(self.board_size):
                 for col in range(self.board_size):
                     piece = self.board[row][col]
                     if piece and piece["color"] == self.current_player:
                         jumps, regular_moves = self.get_valid_moves(row, col)
-                        for jump in jumps:
-                            all_moves.append((row, col, jump[0], jump[1], True))
-                        if not jumps:
-                            for move in regular_moves:
-                                all_moves.append((row, col, move[0], move[1], False))
-
-            if not all_moves:
+                        if jumps:
+                            all_jumps.extend([(row, col, j[0], j[1]) for j in jumps])
+                        elif not all_jumps:  # Only add regular moves if no jumps are available
+                            all_moves.extend([(row, col, m[0], m[1]) for m in regular_moves])
+            if all_jumps:
+                # Choose the best jump
+                best_move = None
+                best_score = float('-inf')
+                for move in all_jumps:
+                    temp_board = deepcopy(self.board)
+                    self.simulate_move(temp_board, move[0], move[1], move[2], move[3], is_jump=True)
+                    score = self.evaluate_board(temp_board, self.current_player)
+                    if score > best_score:
+                        best_score = score
+                        best_move = move
+                move = best_move
+            elif all_moves:
+                # Choose the best regular move
+                best_move = None
+                best_score = float('-inf')
+                for move in all_moves:
+                    temp_board = deepcopy(self.board)
+                    self.simulate_move(temp_board, move[0], move[1], move[2], move[3], is_jump=False)
+                    score = self.evaluate_board(temp_board, self.current_player)
+                    if score > best_score:
+                        best_score = score
+                        best_move = move
+                move = best_move
+            else:
                 winner = self.check_winner()
                 if winner:
                     messagebox.showinfo("Game Over", f"{winner} wins!")
                     self.reset_game()
                 return  # No valid moves available
 
-            # Evaluate each possible move
-            best_move = None
-            best_score = float('-inf')
-            for move in all_moves:
-                temp_board = deepcopy(self.board)
-                self.simulate_move(temp_board, move[0], move[1], move[2], move[3], is_jump=move[4])
-                score = self.evaluate_board(temp_board, self.current_player)
-                if score > best_score:
-                    best_score = score
-                    best_move = move
+        if not move:
+            winner = self.check_winner()
+            if winner:
+                messagebox.showinfo("Game Over", f"{winner} wins!")
+                self.reset_game()
+            return
 
-            from_row, from_col, to_row, to_col, is_jump = best_move
+        # Determine if this is a jump move
+        from_row, from_col, to_row, to_col = move
+        is_jump = abs(to_row - from_row) == 2
 
         # Save the current board state and current player for undo functionality
         # Save BEFORE moving
@@ -595,13 +625,13 @@ class CheckersGame:
             self.reset_game()
         elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
             self.root.after(500, self.ai_move)
-
+    
     def simulate_move(self, board, from_row, from_col, to_row, to_col, is_jump=False):
         """
         Simulate moving a piece on a given board.
         """
         # Move the piece
-        piece = board[from_row][from_col]
+        piece = board[from_row][from_col].copy()  # Copy the piece to avoid modifying the original
         board[to_row][to_col] = piece
         board[from_row][from_col] = None
 
@@ -616,7 +646,7 @@ class CheckersGame:
             piece["king"] = True
         elif piece["color"] == "BLACK" and to_row == self.board_size - 1:
             piece["king"] = True
-
+    
     def evaluate_board(self, board, player_color):
         """
         Evaluate the board from the perspective of player_color.
@@ -635,7 +665,7 @@ class CheckersGame:
                     else:
                         score -= value
         return score
-
+    
     def ai_make_expert_move(self):
         # Ensure it's the AI's turn
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
@@ -699,7 +729,7 @@ class CheckersGame:
             self.reset_game()
         elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
             self.root.after(500, self.ai_move)
-
+    
     def ai_make_expert_move_continue(self, from_row, from_col):
         # Continue the jump sequence for expert AI
 
@@ -771,7 +801,7 @@ class CheckersGame:
             self.reset_game()
         elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
             self.root.after(500, self.ai_move)
-
+    
     def get_all_possible_moves(self, board, player_color):
         all_moves = []
         for row in range(self.board_size):
@@ -785,7 +815,7 @@ class CheckersGame:
                         for move in regular_moves:
                             all_moves.append((row, col, move[0], move[1], False))
         return all_moves
-
+    
     def get_valid_moves_on_board(self, board, row, col, player_color=None):
         # Similar to get_valid_moves, but operates on a given board
         piece = board[row][col]
@@ -795,11 +825,11 @@ class CheckersGame:
             return [], []
         if player_color is None and piece["color"] != self.current_player:
             return [], []
-
+    
         valid_moves = []
         jumps = []
         directions = []
-
+    
         # Determine valid directions based on piece type and color
         if piece["color"] == "RED" and not piece["king"]:
             directions = [(-1, -1), (-1, 1)]  # Red moves up
@@ -807,7 +837,7 @@ class CheckersGame:
             directions = [(1, -1), (1, 1)]    # Black moves down
         else:  # King can move in all directions
             directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
-
+    
         # Check for regular moves and jumps
         for d_row, d_col in directions:
             # Regular moves
@@ -816,22 +846,22 @@ class CheckersGame:
             if self.is_valid_position(new_row, new_col):
                 if not board[new_row][new_col]:
                     valid_moves.append((new_row, new_col))
-
+    
             # Jumps
             jump_row = row + 2 * d_row
             jump_col = col + 2 * d_col
-            new_row = row + d_row
-            new_col = col + d_col
+            middle_row = row + d_row
+            middle_col = col + d_col
             if (self.is_valid_position(jump_row, jump_col) and 
-                self.is_valid_position(new_row, new_col)):
-                jumped_piece = board[new_row][new_col]
+                self.is_valid_position(middle_row, middle_col)):
+                jumped_piece = board[middle_row][middle_col]
                 if (jumped_piece and 
                     jumped_piece["color"] != piece["color"] and 
                     not board[jump_row][jump_col]):
                     jumps.append((jump_row, jump_col))
-
+    
         return jumps, valid_moves
-
+    
     def minimax(self, board, depth, alpha, beta, maximizing_player):
         """
         Minimax algorithm with alpha-beta pruning.
@@ -868,7 +898,7 @@ class CheckersGame:
                 if beta <= alpha:
                     break
             return min_eval
-
+    
     def is_terminal_state(self, board):
         # Return True if the game is over (one player has no pieces or no moves)
         red_pieces = black_pieces = 0
@@ -893,7 +923,21 @@ class CheckersGame:
             return True
         else:
             return False
-
+    
+    def get_all_possible_moves(self, board, player_color):
+        all_moves = []
+        for row in range(self.board_size):
+            for col in range(self.board_size):
+                piece = board[row][col]
+                if piece and piece["color"] == player_color:
+                    jumps, regular_moves = self.get_valid_moves_on_board(board, row, col, player_color=player_color)
+                    for jump in jumps:
+                        all_moves.append((row, col, jump[0], jump[1], True))
+                    if not jumps:
+                        for move in regular_moves:
+                            all_moves.append((row, col, move[0], move[1], False))
+        return all_moves
+    
     def run(self):
         self.root.mainloop()
 
