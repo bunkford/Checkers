@@ -22,10 +22,14 @@ class CheckersGame:
         self.selected_piece = None
         self.current_player = "RED"
         self.board = self.initialize_board()
-        self.move_stack = []  # Stack to store (board, current_player) before each move
-        self.redo_stack = []  # Stack to store (board, current_player) for redo functionality
+        self.move_stack = []  # Stack to store (board, current_player, moves_since_last_capture) before each move
+        self.redo_stack = []  # Stack to store (board, current_player, moves_since_last_capture) for redo functionality
         self.opponent_type = tk.StringVar(value="AI")  # Default opponent type HUMAN or AI
         self.ai_skill_level = tk.StringVar(value='Regular')  # AI Skill Level variable
+        
+        # Draw condition variables
+        self.moves_since_last_capture = 0
+        self.draw_threshold = 40  # Number of consecutive moves without capture to declare a draw
                 
         # Create canvas
         canvas_size = self.board_size * self.square_size
@@ -71,6 +75,7 @@ class CheckersGame:
         self.skill_menu.add_radiobutton(label="Beginner", command=lambda: self.set_ai_skill_level("Beginner"), variable=self.ai_skill_level, value="Beginner")
         self.skill_menu.add_radiobutton(label="Regular", command=lambda: self.set_ai_skill_level("Regular"), variable=self.ai_skill_level, value="Regular")
         self.skill_menu.add_radiobutton(label="Expert", command=lambda: self.set_ai_skill_level("Expert"), variable=self.ai_skill_level, value="Expert")
+        self.skill_menu.add_radiobutton(label="Master", command=lambda: self.set_ai_skill_level("Master"), variable=self.ai_skill_level, value="Master")
         
         # Bind keyboard shortcuts
         self.root.bind_all("<Control-z>", lambda event: self.undo_move())
@@ -261,13 +266,25 @@ class CheckersGame:
                 # Determine if this is a jump move
                 is_jump = abs(row - selected_row) == 2
                 
-                # Save the current board state and current player for undo functionality
+                # Save the current board state, current player, and move counter for undo functionality
                 # Save BEFORE moving
-                self.move_stack.append((deepcopy(self.board), self.current_player))
+                self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
                 self.redo_stack.clear()  # Clear the redo stack since new move is made
                 
                 # Move the piece
                 self.move_piece(selected_row, selected_col, row, col, is_jump)
+                
+                # Update move counter
+                if is_jump:
+                    self.moves_since_last_capture = 0
+                else:
+                    self.moves_since_last_capture += 1
+                
+                # Check for draw condition
+                if self.moves_since_last_capture >= self.draw_threshold:
+                    messagebox.showinfo("Draw", "The game is a draw due to too many moves without capture!")
+                    self.reset_game()
+                    return
                 
                 # Check for additional jumps
                 additional_jumps, _ = self.get_valid_moves(row, col)
@@ -385,6 +402,7 @@ class CheckersGame:
         self.selected_piece = None
         self.move_stack = []
         self.redo_stack = []
+        self.moves_since_last_capture = 0  # Reset move counter
         self.clear_highlights()
         self.draw_board()
         self.draw_pieces()
@@ -394,9 +412,9 @@ class CheckersGame:
     def undo_move(self):
         if self.move_stack:
             # Save current state to redo stack
-            self.redo_stack.append((deepcopy(self.board), self.current_player))
+            self.redo_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
             # Restore previous state
-            self.board, self.current_player = self.move_stack.pop()
+            self.board, self.current_player, self.moves_since_last_capture = self.move_stack.pop()
             self.selected_piece = None
             self.clear_highlights()
             self.draw_board()
@@ -410,9 +428,9 @@ class CheckersGame:
     def redo_move(self):
         if self.redo_stack:
             # Save current state to move stack
-            self.move_stack.append((deepcopy(self.board), self.current_player))
+            self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
             # Restore next state
-            self.board, self.current_player = self.redo_stack.pop()
+            self.board, self.current_player, self.moves_since_last_capture = self.redo_stack.pop()
             self.selected_piece = None
             self.clear_highlights()
             self.draw_board()
@@ -428,251 +446,17 @@ class CheckersGame:
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
             return  # It's not AI's turn
 
-        if self.ai_skill_level.get() == "Beginner":
-            self.ai_make_random_move()
-        elif self.ai_skill_level.get() == "Regular":
-            self.ai_make_regular_move()
-        elif self.ai_skill_level.get() == "Expert":
-            self.ai_make_expert_move()
-        else:
-            self.ai_make_random_move()
-    
-    def ai_make_random_move(self, from_row=None, from_col=None):
-        # Ensure it's the AI's turn
-        if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
-            return  # It's not AI's turn
+        # Determine search depth based on AI skill level
+        skill_level = self.ai_skill_level.get()
+        depth_mapping = {
+            "Beginner": 1,
+            "Regular": 3,
+            "Expert": 4,
+            "Master": 5
+        }
+        depth = depth_mapping.get(skill_level, 3)  # Default to Regular if undefined
 
-        if from_row is not None and from_col is not None:
-            # Continuing a jump sequence
-            jumps, _ = self.get_valid_moves(from_row, from_col)
-            if jumps:
-                move = random.choice([(from_row, from_col, j[0], j[1]) for j in jumps])
-            else:
-                # No more jumps, end turn
-                self.switch_player()
-                winner = self.check_winner()
-                if winner:
-                    messagebox.showinfo("Game Over", f"{winner} wins!")
-                    self.reset_game()
-                elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-                    self.root.after(500, self.ai_move)
-                return
-        else:
-            # First move in AI's turn
-            all_jumps = []
-            all_moves = []
-            for row in range(self.board_size):
-                for col in range(self.board_size):
-                    piece = self.board[row][col]
-                    if piece and piece["color"] == self.current_player:
-                        jumps, regular_moves = self.get_valid_moves(row, col)
-                        if jumps:
-                            all_jumps.extend([(row, col, j[0], j[1]) for j in jumps])
-                        elif not all_jumps:  # Only add regular moves if no jumps are available
-                            all_moves.extend([(row, col, m[0], m[1]) for m in regular_moves])
-            if all_jumps:
-                move = random.choice(all_jumps)
-            elif all_moves:
-                move = random.choice(all_moves)
-            else:
-                winner = self.check_winner()
-                if winner:
-                    messagebox.showinfo("Game Over", f"{winner} wins!")
-                    self.reset_game()
-                return  # No valid moves available
-
-        # Determine if this is a jump move
-        from_row, from_col, to_row, to_col = move
-        is_jump = abs(to_row - from_row) == 2
-
-        # Save the current board state and current player for undo functionality
-        # Save BEFORE moving
-        self.move_stack.append((deepcopy(self.board), self.current_player))
-        self.redo_stack.clear()  # Clear the redo stack since a new move is made
-
-        # Move the piece
-        self.move_piece(from_row, from_col, to_row, to_col, is_jump)
-
-        # Update the UI
-        self.root.update_idletasks()
-
-        # Check for additional jumps
-        if is_jump:
-            additional_jumps, _ = self.get_valid_moves(to_row, to_col)
-            if additional_jumps:
-                # Schedule the next jump after a delay
-                self.root.after(500, lambda: self.ai_make_random_move(to_row, to_col))
-                return
-
-        # No additional jumps, end turn
-        self.switch_player()
-        winner = self.check_winner()
-        if winner:
-            messagebox.showinfo("Game Over", f"{winner} wins!")
-            self.reset_game()
-        elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-            self.root.after(500, self.ai_move)
-    
-    def ai_make_regular_move(self, from_row=None, from_col=None):
-        # Ensure it's the AI's turn
-        if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
-            return  # It's not AI's turn
-
-        if from_row is not None and from_col is not None:
-            # Continuing a jump sequence
-            jumps, _ = self.get_valid_moves(from_row, from_col)
-            if jumps:
-                # For regular AI, pick the best jump based on evaluation
-                best_move = None
-                best_score = float('-inf')
-                for jump in jumps:
-                    temp_board = deepcopy(self.board)
-                    self.simulate_move(temp_board, from_row, from_col, jump[0], jump[1], is_jump=True)
-                    score = self.evaluate_board(temp_board, self.current_player)
-                    if score > best_score:
-                        best_score = score
-                        best_move = (from_row, from_col, jump[0], jump[1])
-                move = best_move
-            else:
-                # No more jumps, end turn
-                self.switch_player()
-                winner = self.check_winner()
-                if winner:
-                    messagebox.showinfo("Game Over", f"{winner} wins!")
-                    self.reset_game()
-                elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-                    self.root.after(500, self.ai_move)
-                return
-        else:
-            # First move in AI's turn
-            all_jumps = []
-            all_moves = []
-            for row in range(self.board_size):
-                for col in range(self.board_size):
-                    piece = self.board[row][col]
-                    if piece and piece["color"] == self.current_player:
-                        jumps, regular_moves = self.get_valid_moves(row, col)
-                        if jumps:
-                            all_jumps.extend([(row, col, j[0], j[1]) for j in jumps])
-                        elif not all_jumps:  # Only add regular moves if no jumps are available
-                            all_moves.extend([(row, col, m[0], m[1]) for m in regular_moves])
-            if all_jumps:
-                # Choose the best jump
-                best_move = None
-                best_score = float('-inf')
-                for move in all_jumps:
-                    temp_board = deepcopy(self.board)
-                    self.simulate_move(temp_board, move[0], move[1], move[2], move[3], is_jump=True)
-                    score = self.evaluate_board(temp_board, self.current_player)
-                    if score > best_score:
-                        best_score = score
-                        best_move = move
-                move = best_move
-            elif all_moves:
-                # Choose the best regular move
-                best_move = None
-                best_score = float('-inf')
-                for move in all_moves:
-                    temp_board = deepcopy(self.board)
-                    self.simulate_move(temp_board, move[0], move[1], move[2], move[3], is_jump=False)
-                    score = self.evaluate_board(temp_board, self.current_player)
-                    if score > best_score:
-                        best_score = score
-                        best_move = move
-                move = best_move
-            else:
-                winner = self.check_winner()
-                if winner:
-                    messagebox.showinfo("Game Over", f"{winner} wins!")
-                    self.reset_game()
-                return  # No valid moves available
-
-        if not move:
-            winner = self.check_winner()
-            if winner:
-                messagebox.showinfo("Game Over", f"{winner} wins!")
-                self.reset_game()
-            return
-
-        # Determine if this is a jump move
-        from_row, from_col, to_row, to_col = move
-        is_jump = abs(to_row - from_row) == 2
-
-        # Save the current board state and current player for undo functionality
-        # Save BEFORE moving
-        self.move_stack.append((deepcopy(self.board), self.current_player))
-        self.redo_stack.clear()  # Clear the redo stack since a new move is made
-
-        # Move the piece
-        self.move_piece(from_row, from_col, to_row, to_col, is_jump)
-
-        # Update the UI
-        self.root.update_idletasks()
-
-        # Check for additional jumps
-        if is_jump:
-            additional_jumps, _ = self.get_valid_moves(to_row, to_col)
-            if additional_jumps:
-                # Schedule the next jump after a delay
-                self.root.after(500, lambda: self.ai_make_regular_move(to_row, to_col))
-                return
-
-        # No additional jumps, end turn
-        self.switch_player()
-        winner = self.check_winner()
-        if winner:
-            messagebox.showinfo("Game Over", f"{winner} wins!")
-            self.reset_game()
-        elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-            self.root.after(500, self.ai_move)
-    
-    def simulate_move(self, board, from_row, from_col, to_row, to_col, is_jump=False):
-        """
-        Simulate moving a piece on a given board.
-        """
-        # Move the piece
-        piece = board[from_row][from_col].copy()  # Copy the piece to avoid modifying the original
-        board[to_row][to_col] = piece
-        board[from_row][from_col] = None
-
-        # Remove the jumped piece if it's a jump move
-        if is_jump:
-            jumped_row = (from_row + to_row) // 2
-            jumped_col = (from_col + to_col) // 2
-            board[jumped_row][jumped_col] = None
-
-        # Check for king promotion immediately
-        if piece["color"] == "RED" and to_row == 0:
-            piece["king"] = True
-        elif piece["color"] == "BLACK" and to_row == self.board_size - 1:
-            piece["king"] = True
-    
-    def evaluate_board(self, board, player_color):
-        """
-        Evaluate the board from the perspective of player_color.
-        Positive scores are good for player_color, negative scores are bad.
-        """
-        score = 0
-        for row in range(self.board_size):
-            for col in range(self.board_size):
-                piece = board[row][col]
-                if piece:
-                    value = 1
-                    if piece["king"]:
-                        value = 1.5  # kings are more valuable
-                    if piece["color"] == player_color:
-                        score += value
-                    else:
-                        score -= value
-        return score
-    
-    def ai_make_expert_move(self):
-        # Ensure it's the AI's turn
-        if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
-            return  # It's not AI's turn
-
-        depth = 4  # Set the search depth (increase for more difficulty)
-
+        # Execute AI move using Minimax with the determined depth
         best_move = None
         best_score = float('-inf')
         possible_moves = self.get_all_possible_moves(self.board, self.current_player)
@@ -702,96 +486,33 @@ class CheckersGame:
 
         from_row, from_col, to_row, to_col, is_jump = best_move
 
-        # Save the current board state and current player for undo functionality
+        # Save the current board state, current player, and move counter for undo functionality
         # Save BEFORE moving
-        self.move_stack.append((deepcopy(self.board), self.current_player))
+        self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
         self.redo_stack.clear()  # Clear the redo stack since a new move is made
 
         # Move the piece
         self.move_piece(from_row, from_col, to_row, to_col, is_jump)
 
-        # Update the UI
-        self.root.update_idletasks()
+        # Update move counter
+        if is_jump:
+            self.moves_since_last_capture = 0
+        else:
+            self.moves_since_last_capture += 1
+
+        # Check for draw condition
+        if self.moves_since_last_capture >= self.draw_threshold:
+            messagebox.showinfo("Draw", "The game is a draw due to too many moves without capture!")
+            self.reset_game()
+            return
 
         # Check for additional jumps
         if is_jump:
             additional_jumps, _ = self.get_valid_moves(to_row, to_col)
             if additional_jumps:
                 # Schedule the next jump after a delay
-                self.root.after(500, lambda: self.ai_make_expert_move_continue(to_row, to_col))
+                self.root.after(500, lambda: self.ai_move())
                 return
-
-        # No additional jumps, end turn
-        self.switch_player()
-        winner = self.check_winner()
-        if winner:
-            messagebox.showinfo("Game Over", f"{winner} wins!")
-            self.reset_game()
-        elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-            self.root.after(500, self.ai_move)
-    
-    def ai_make_expert_move_continue(self, from_row, from_col):
-        # Continue the jump sequence for expert AI
-
-        # Ensure it's the AI's turn
-        if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
-            return  # It's not AI's turn
-
-        depth = 4  # Set the search depth (increase for more difficulty)
-
-        jumps, _ = self.get_valid_moves(from_row, from_col)
-        if not jumps:
-            # No more jumps, end turn
-            self.switch_player()
-            winner = self.check_winner()
-            if winner:
-                messagebox.showinfo("Game Over", f"{winner} wins!")
-                self.reset_game()
-            elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-                self.root.after(500, self.ai_move)
-            return
-
-        best_move = None
-        best_score = float('-inf')
-
-        for jump in jumps:
-            temp_board = deepcopy(self.board)
-            self.simulate_move(temp_board, from_row, from_col, jump[0], jump[1], is_jump=True)
-            score = self.minimax(temp_board, depth - 1, float('-inf'), float('inf'), False)
-            if score > best_score:
-                best_score = score
-                best_move = (from_row, from_col, jump[0], jump[1], True)
-
-        if best_move is None:
-            # No valid jumps
-            self.switch_player()
-            winner = self.check_winner()
-            if winner:
-                messagebox.showinfo("Game Over", f"{winner} wins!")
-                self.reset_game()
-            elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
-                self.root.after(500, self.ai_move)
-            return
-
-        from_row, from_col, to_row, to_col, is_jump = best_move
-
-        # Save the current board state and current player for undo functionality
-        # Save BEFORE moving
-        self.move_stack.append((deepcopy(self.board), self.current_player))
-        self.redo_stack.clear()  # Clear the redo stack since a new move is made
-
-        # Move the piece
-        self.move_piece(from_row, from_col, to_row, to_col, is_jump)
-
-        # Update the UI
-        self.root.update_idletasks()
-
-        # Check for additional jumps
-        additional_jumps, _ = self.get_valid_moves(to_row, to_col)
-        if additional_jumps:
-            # Schedule the next jump after a delay
-            self.root.after(500, lambda: self.ai_make_expert_move_continue(to_row, to_col))
-            return
 
         # No additional jumps, end turn
         self.switch_player()
@@ -869,6 +590,46 @@ class CheckersGame:
                     jumps.append((jump_row, jump_col))
     
         return jumps, valid_moves
+    
+    def simulate_move(self, board, from_row, from_col, to_row, to_col, is_jump=False):
+        """
+        Simulate moving a piece on a given board.
+        """
+        # Move the piece
+        piece = board[from_row][from_col].copy()  # Copy the piece to avoid modifying the original
+        board[to_row][to_col] = piece
+        board[from_row][from_col] = None
+
+        # Remove the jumped piece if it's a jump move
+        if is_jump:
+            jumped_row = (from_row + to_row) // 2
+            jumped_col = (from_col + to_col) // 2
+            board[jumped_row][jumped_col] = None
+
+        # Check for king promotion immediately
+        if piece["color"] == "RED" and to_row == 0:
+            piece["king"] = True
+        elif piece["color"] == "BLACK" and to_row == self.board_size - 1:
+            piece["king"] = True
+    
+    def evaluate_board(self, board, player_color):
+        """
+        Evaluate the board from the perspective of player_color.
+        Positive scores are good for player_color, negative scores are bad.
+        """
+        score = 0
+        for row in range(self.board_size):
+            for col in range(self.board_size):
+                piece = board[row][col]
+                if piece:
+                    value = 1
+                    if piece["king"]:
+                        value = 1.5  # kings are more valuable
+                    if piece["color"] == player_color:
+                        score += value
+                    else:
+                        score -= value
+        return score
     
     def minimax(self, board, depth, alpha, beta, maximizing_player):
         """
