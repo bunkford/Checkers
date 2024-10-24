@@ -22,14 +22,13 @@ class CheckersGame:
         self.selected_piece = None
         self.current_player = "RED"
         self.board = self.initialize_board()
-        self.move_stack = []  # Stack to store (board, current_player, moves_since_last_capture) before each move
-        self.redo_stack = []  # Stack to store (board, current_player, moves_since_last_capture) for redo functionality
+        self.move_stack = []  # Stack to store (board, current_player, last_move) before each move
+        self.redo_stack = []  # Stack to store (board, current_player, last_move) for redo functionality
         self.opponent_type = tk.StringVar(value="AI")  # Default opponent type HUMAN or AI
         self.ai_skill_level = tk.StringVar(value='Regular')  # AI Skill Level variable
-        
-        # Draw condition variables
-        self.moves_since_last_capture = 0
-        self.draw_threshold = 40  # Number of consecutive moves without capture to declare a draw
+
+        self.red_captured = 0
+        self.black_captured = 0
                 
         # Create canvas
         canvas_size = self.board_size * self.square_size
@@ -40,12 +39,45 @@ class CheckersGame:
         )
         self.canvas.pack()
         
+        # Status bar
+        self.status_bar = tk.Frame(self.root)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        # StringVars for status bar
+        self.current_player_var = tk.StringVar()
+        self.red_captured_var = tk.StringVar()
+        self.black_captured_var = tk.StringVar()
+        self.mandatory_jump_var = tk.StringVar()
+        self.last_move_var = tk.StringVar()
+        
+        # Initialize status bar variables
+        self.current_player_var.set(f"TURN: {self.current_player}")
+        self.red_captured_var.set("BLACK: 0")
+        self.black_captured_var.set("RED: 0")
+        self.mandatory_jump_var.set("MJ: N")
+        self.last_move_var.set("LM: START")
+        
+        # Create labels with grid layout for uniform sections
+        self.current_player_label = tk.Label(self.status_bar, textvariable=self.current_player_var, width=10, anchor='w')
+        self.red_captured_label = tk.Label(self.status_bar, textvariable=self.red_captured_var, width=10, anchor='w')
+        self.black_captured_label = tk.Label(self.status_bar, textvariable=self.black_captured_var, width=10, anchor='w')
+        self.mandatory_jump_label = tk.Label(self.status_bar, textvariable=self.mandatory_jump_var, width=10, anchor='w')
+        self.last_move_label = tk.Label(self.status_bar, textvariable=self.last_move_var, width=10, anchor='w')
+        
+        # Place labels in the status bar using grid
+        self.current_player_label.grid(row=0, column=0, padx=5)
+        self.red_captured_label.grid(row=0, column=1, padx=5)
+        self.black_captured_label.grid(row=0, column=2, padx=5)
+        self.mandatory_jump_label.grid(row=0, column=3, padx=5)
+        self.last_move_label.grid(row=0, column=4, padx=5)
+        
         # Bind click event
         self.canvas.bind('<Button-1>', self.handle_click)
         
-        # Draw initial board
+        # Draw initial board and pieces
         self.draw_board()
         self.draw_pieces()
+        self.update_captured_counts()
         
         # Add menu for opponent selection and move options
         self.menu = tk.Menu(self.root)
@@ -126,25 +158,27 @@ class CheckersGame:
         x = col * self.square_size + self.square_size // 2
         y = row * self.square_size + self.square_size // 2
         radius = (self.square_size - 2 * self.piece_padding) // 2
-        
+
         color = self.RED_PIECE if piece["color"] == "RED" else self.BLACK_PIECE
-        
+
         # Draw the main piece
-        self.canvas.create_oval(
+        piece_id = self.canvas.create_oval(
             x - radius, y - radius,
             x + radius, y + radius,
             fill=color, tags="piece"
         )
-        
+        piece["id"] = piece_id  # Store the canvas ID in the piece
+
         # Draw king crown if piece is king
         if piece["king"]:
             crown_radius = radius * 0.6
             crown_color = "gold"
-            self.canvas.create_oval(
+            crown_id = self.canvas.create_oval(
                 x - crown_radius, y - crown_radius,
                 x + crown_radius, y + crown_radius,
                 fill=crown_color, tags="piece"
             )
+            piece["crown_id"] = crown_id  # Store the crown ID in the piece
     
     def get_square_from_coords(self, x, y):
         row = y // self.square_size
@@ -217,6 +251,17 @@ class CheckersGame:
     def clear_highlights(self):
         self.canvas.delete("highlight")
     
+    def move_to_abbr(self, from_row, from_col, to_row, to_col):
+        """
+        Convert move coordinates to abbreviated notation (e.g., A3-B4).
+        """
+        col_letters = 'ABCDEFGH'
+        from_col_letter = col_letters[from_col]
+        from_row_number = self.board_size - from_row
+        to_col_letter = col_letters[to_col]
+        to_row_number = self.board_size - to_row
+        return f"{from_col_letter}{from_row_number}-{to_col_letter}{to_row_number}"
+    
     def handle_click(self, event):
         if self.current_player == "BLACK" and self.opponent_type.get() == "AI":
             return  # Ignore clicks during AI's turn
@@ -230,6 +275,7 @@ class CheckersGame:
         # Determine if there are any mandatory jumps for the current player
         mandatory_jumps = self.get_all_mandatory_jumps()
         if mandatory_jumps:
+            self.mandatory_jump_var.set("MJ: Y")
             # If there are mandatory jumps, only allow selecting pieces with jumps
             if not self.selected_piece:
                 if (row, col) not in [pos[:2] for pos in mandatory_jumps]:
@@ -240,6 +286,8 @@ class CheckersGame:
                 valid_jump_positions = [ (move[2], move[3]) for move in mandatory_jumps if move[0] == from_row and move[1] == from_col ]
                 if (row, col) not in valid_jump_positions:
                     return
+        else:
+            self.mandatory_jump_var.set("MJ: N")
         
         # If no piece is selected
         if not self.selected_piece:
@@ -266,33 +314,21 @@ class CheckersGame:
                 # Determine if this is a jump move
                 is_jump = abs(row - selected_row) == 2
                 
-                # Save the current board state, current player, and move counter for undo functionality
+                # Convert move to abbreviated form
+                last_move_abbr = self.move_to_abbr(selected_row, selected_col, row, col)
+                
+                # Save the current board state, current player, and last move for undo functionality
                 # Save BEFORE moving
-                self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
+                self.move_stack.append((deepcopy(self.board), self.current_player, self.last_move_var.get()))
                 self.redo_stack.clear()  # Clear the redo stack since new move is made
+                
+                self.clear_highlights()
                 
                 # Move the piece
                 self.move_piece(selected_row, selected_col, row, col, is_jump)
                 
-                # Update move counter
-                if is_jump:
-                    self.moves_since_last_capture = 0
-                else:
-                    self.moves_since_last_capture += 1
-                
-                # Check for draw condition
-                if self.moves_since_last_capture >= self.draw_threshold:
-                    messagebox.showinfo("Draw", "The game is a draw due to too many moves without capture!")
-                    self.reset_game()
-                    return
-                
                 # Check for additional jumps
                 additional_jumps, _ = self.get_valid_moves(row, col)
-                
-                # If piece was promoted to king, update directions
-                if self.board[row][col]["king"]:
-                    # Recalculate jumps if promoted
-                    additional_jumps, _ = self.get_valid_moves(row, col)
                 
                 # Only switch players if:
                 # 1. It wasn't a jump move, or
@@ -313,6 +349,8 @@ class CheckersGame:
                 else:
                     # If there are additional jumps, keep the piece selected
                     self.selected_piece = (row, col)
+                    self.mandatory_jump_var.set("MJ: Y")
+                    self.last_move_var.set(f"LM: {last_move_abbr}")
                     self.highlight_valid_moves(additional_jumps)
                     return
             
@@ -335,29 +373,84 @@ class CheckersGame:
         return mandatory_jumps
     
     def move_piece(self, from_row, from_col, to_row, to_col, is_jump=False):
-        # Move the piece
+        # Move the piece in the board
         piece = self.board[from_row][from_col]
         self.board[to_row][to_col] = piece
         self.board[from_row][from_col] = None
+
+        # Update Last Move in status bar
+        last_move_abbr = self.move_to_abbr(from_row, from_col, to_row, to_col)
+        self.last_move_var.set(f"LM: {last_move_abbr}")
+                
+        # Move the canvas item with animation
+        piece_ids = [piece["id"]]
+        if "crown_id" in piece:
+            piece_ids.append(piece["crown_id"])
+        dx = (to_col - from_col) * self.square_size
+        dy = (to_row - from_row) * self.square_size
+        self.animate_move(piece_ids, dx, dy)
 
         # Remove the jumped piece if it's a jump move
         if is_jump:
             jumped_row = (from_row + to_row) // 2
             jumped_col = (from_col + to_col) // 2
-            self.board[jumped_row][jumped_col] = None
-
+            jumped_piece = self.board[jumped_row][jumped_col]
+            if jumped_piece:
+                jumped_piece_id = jumped_piece["id"]
+                self.canvas.delete(jumped_piece_id)
+                if "crown_id" in jumped_piece:
+                    self.canvas.delete(jumped_piece["crown_id"])
+                self.board[jumped_row][jumped_col] = None
+                # Update captured pieces count
+                self.update_captured_counts()
+             
         # Check for king promotion immediately
-        if piece["color"] == "RED" and to_row == 0:
+        if piece["color"] == "RED" and to_row == 0 and not piece["king"]:
             piece["king"] = True
-        elif piece["color"] == "BLACK" and to_row == self.board_size - 1:
+            # Add the crown
+            self.add_crown(piece, to_row, to_col)
+        elif piece["color"] == "BLACK" and to_row == self.board_size - 1 and not piece["king"]:
             piece["king"] = True
-
-        # Redraw the board to show the changes
-        self.draw_board()
-        self.draw_pieces()
+            # Add the crown
+            self.add_crown(piece, to_row, to_col)
+        
+        # Update Last Move in status bar if no jump was made
+        if not is_jump:
+            last_move_abbr = self.move_to_abbr(from_row, from_col, to_row, to_col)
+            self.last_move_var.set(f"LM: {last_move_abbr}")
+    
+    def animate_move(self, piece_ids, dx, dy):
+        steps = 10
+        delta_x = dx / steps
+        delta_y = dy / steps
+        for _ in range(steps):
+            for piece_id in piece_ids:
+                self.canvas.move(piece_id, delta_x, delta_y)
+            self.canvas.update()
+            self.canvas.after(20)  # Wait 20 milliseconds between moves
+    
+    def add_crown(self, piece, row, col):
+        x = col * self.square_size + self.square_size // 2
+        y = row * self.square_size + self.square_size // 2
+        radius = (self.square_size - 2 * self.piece_padding) // 2
+        crown_radius = radius * 0.6
+        crown_color = "gold"
+        crown_id = self.canvas.create_oval(
+            x - crown_radius, y - crown_radius,
+            x + crown_radius, y + crown_radius,
+            fill=crown_color, tags="piece"
+        )
+        piece["crown_id"] = crown_id
     
     def switch_player(self):
         self.current_player = "BLACK" if self.current_player == "RED" else "RED"
+        self.current_player_var.set(f"TURN: {self.current_player}")
+        # Check for mandatory jumps
+        mandatory_jumps = self.get_all_mandatory_jumps()
+        if mandatory_jumps:
+            self.mandatory_jump_var.set("MJ: Y")
+        else:
+            self.mandatory_jump_var.set("MJ: N")
     
     def has_valid_moves(self, player_color):
         for row in range(self.board_size):
@@ -402,23 +495,47 @@ class CheckersGame:
         self.selected_piece = None
         self.move_stack = []
         self.redo_stack = []
-        self.moves_since_last_capture = 0  # Reset move counter
         self.clear_highlights()
+        self.canvas.delete("piece")
         self.draw_board()
         self.draw_pieces()
+        self.update_captured_counts()
+        self.current_player_var.set(f"TURN: {self.current_player}")
+        self.mandatory_jump_var.set("MJ: N")
+        self.last_move_var.set("LM: START")
         if self.opponent_type.get() == "AI" and self.current_player == "BLACK":
             self.root.after(500, self.ai_move)
+    
+    def update_captured_counts(self):
+        red_pieces = 0
+        black_pieces = 0
+        for row in self.board:
+            for piece in row:
+                if piece:
+                    if piece["color"] == "RED":
+                        red_pieces += 1
+                    else:
+                        black_pieces += 1
+        self.red_captured = 12 - red_pieces
+        self.black_captured = 12 - black_pieces
+        self.red_captured_var.set(f"BLACK: {self.red_captured}")
+        self.black_captured_var.set(f"RED: {self.black_captured}")
     
     def undo_move(self):
         if self.move_stack:
             # Save current state to redo stack
-            self.redo_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
+            last_state = (deepcopy(self.board), self.current_player, self.last_move_var.get())
+            self.redo_stack.append(last_state)
             # Restore previous state
-            self.board, self.current_player, self.moves_since_last_capture = self.move_stack.pop()
+            self.board, self.current_player, last_move = self.move_stack.pop()
             self.selected_piece = None
             self.clear_highlights()
-            self.draw_board()
+            self.canvas.delete("piece")
             self.draw_pieces()
+            self.update_captured_counts()
+            self.current_player_var.set(f"TURN: {self.current_player}")
+            self.mandatory_jump_var.set("MJ: Y" if self.get_all_mandatory_jumps() else "MJ: N")
+            self.last_move_var.set(last_move)
             # If it's AI's turn after undo and opponent is AI, schedule AI move
             if self.opponent_type.get() == "AI" and self.current_player == "BLACK":
                 self.root.after(1000, self.ai_move)
@@ -428,13 +545,18 @@ class CheckersGame:
     def redo_move(self):
         if self.redo_stack:
             # Save current state to move stack
-            self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
+            last_state = (deepcopy(self.board), self.current_player, self.last_move_var.get())
+            self.move_stack.append(last_state)
             # Restore next state
-            self.board, self.current_player, self.moves_since_last_capture = self.redo_stack.pop()
+            self.board, self.current_player, last_move = self.redo_stack.pop()
             self.selected_piece = None
             self.clear_highlights()
-            self.draw_board()
+            self.canvas.delete("piece")
             self.draw_pieces()
+            self.update_captured_counts()
+            self.current_player_var.set(f"TURN: {self.current_player}")
+            self.mandatory_jump_var.set("MJ: Y" if self.get_all_mandatory_jumps() else "MJ: N")
+            self.last_move_var.set(last_move)
             # If it's AI's turn after redo and opponent is AI, schedule AI move
             if self.opponent_type.get() == "AI" and self.current_player == "BLACK":
                 self.root.after(1000, self.ai_move)
@@ -452,7 +574,7 @@ class CheckersGame:
             "Beginner": 1,
             "Regular": 3,
             "Expert": 4,
-            "Master": 5
+            "Master": 8
         }
         depth = depth_mapping.get(skill_level, 3)  # Default to Regular if undefined
 
@@ -486,32 +608,95 @@ class CheckersGame:
 
         from_row, from_col, to_row, to_col, is_jump = best_move
 
-        # Save the current board state, current player, and move counter for undo functionality
+        # Convert move to abbreviated form
+        last_move_abbr = self.move_to_abbr(from_row, from_col, to_row, to_col)
+
+        # Save the current board state, current player, and last move for undo functionality
         # Save BEFORE moving
-        self.move_stack.append((deepcopy(self.board), self.current_player, self.moves_since_last_capture))
+        self.move_stack.append((deepcopy(self.board), self.current_player, self.last_move_var.get()))
         self.redo_stack.clear()  # Clear the redo stack since a new move is made
 
         # Move the piece
         self.move_piece(from_row, from_col, to_row, to_col, is_jump)
 
-        # Update move counter
-        if is_jump:
-            self.moves_since_last_capture = 0
-        else:
-            self.moves_since_last_capture += 1
-
-        # Check for draw condition
-        if self.moves_since_last_capture >= self.draw_threshold:
-            messagebox.showinfo("Draw", "The game is a draw due to too many moves without capture!")
-            self.reset_game()
-            return
+        # Update the UI
+        self.root.update_idletasks()
 
         # Check for additional jumps
         if is_jump:
             additional_jumps, _ = self.get_valid_moves(to_row, to_col)
             if additional_jumps:
                 # Schedule the next jump after a delay
-                self.root.after(500, lambda: self.ai_move())
+                self.root.after(500, lambda: self.ai_move_continue(to_row, to_col, depth))
+                return
+
+        # No additional jumps, end turn
+        self.switch_player()
+        winner = self.check_winner()
+        if winner:
+            messagebox.showinfo("Game Over", f"{winner} wins!")
+            self.reset_game()
+        elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
+            self.root.after(500, self.ai_move)
+    
+    def ai_move_continue(self, from_row, from_col, depth):
+        # Continuing a jump sequence for AI
+        jumps, _ = self.get_valid_moves(from_row, from_col)
+        if not jumps:
+            # No more jumps, end turn
+            self.switch_player()
+            winner = self.check_winner()
+            if winner:
+                messagebox.showinfo("Game Over", f"{winner} wins!")
+                self.reset_game()
+            elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
+                self.root.after(500, self.ai_move)
+            return
+
+        best_move = None
+        best_score = float('-inf')
+
+        for jump in jumps:
+            temp_board = deepcopy(self.board)
+            self.simulate_move(temp_board, from_row, from_col, jump[0], jump[1], is_jump=True)
+            score = self.minimax(temp_board, depth - 1, float('-inf'), float('inf'), False)
+            if score > best_score:
+                best_score = score
+                best_move = (from_row, from_col, jump[0], jump[1], True)
+
+        if best_move is None:
+            # No valid jumps
+            self.switch_player()
+            winner = self.check_winner()
+            if winner:
+                messagebox.showinfo("Game Over", f"{winner} wins!")
+                self.reset_game()
+            elif self.opponent_type.get() == "AI" and self.current_player == "BLACK":
+                self.root.after(500, self.ai_move)
+            return
+
+        from_row, from_col, to_row, to_col, is_jump = best_move
+
+        # Convert move to abbreviated form
+        last_move_abbr = self.move_to_abbr(from_row, from_col, to_row, to_col)
+
+        # Save the current board state, current player, and last move for undo functionality
+        # Save BEFORE moving
+        self.move_stack.append((deepcopy(self.board), self.current_player, self.last_move_var.get()))
+        self.redo_stack.clear()  # Clear the redo stack since a new move is made
+
+        # Move the piece
+        self.move_piece(from_row, from_col, to_row, to_col, is_jump)
+
+        # Update the UI
+        self.root.update_idletasks()
+
+        # Check for additional jumps
+        if is_jump:
+            additional_jumps, _ = self.get_valid_moves(to_row, to_col)
+            if additional_jumps:
+                # Schedule the next jump after a delay
+                self.root.after(500, lambda: self.ai_move_continue(to_row, to_col, depth))
                 return
 
         # No additional jumps, end turn
@@ -679,13 +864,13 @@ class CheckersGame:
                     if piece["color"] == "RED":
                         red_pieces += 1
                         if not red_has_moves:
-                            jumps, moves = self.get_valid_moves_on_board(board, row, col, player_color="RED")
+                            jumps, moves = self.get_valid_moves(row, col, player_color="RED")
                             if jumps or moves:
                                 red_has_moves = True
                     else:
                         black_pieces += 1
                         if not black_has_moves:
-                            jumps, moves = self.get_valid_moves_on_board(board, row, col, player_color="BLACK")
+                            jumps, moves = self.get_valid_moves(row, col, player_color="BLACK")
                             if jumps or moves:
                                 black_has_moves = True
         if red_pieces == 0 or not red_has_moves or black_pieces == 0 or not black_has_moves:
