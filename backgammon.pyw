@@ -257,7 +257,7 @@ class BackgammonGame:
         
         # Draw a rectangle as a button
         x1 = self.BOARD_WIDTH / 2 - 50
-        y1 = self.BOARD_HEIGHT - 70
+        y1 = 5
         x2 = x1 + 100
         y2 = y1 + 40
         self.roll_button_id = self.canvas.create_rectangle(
@@ -382,7 +382,7 @@ class BackgammonGame:
     
         total_dice_width = len(dice_to_draw) * (dice_size + dice_padding) - dice_padding
         x = (self.BOARD_WIDTH - total_dice_width) / 2
-        y = self.BOARD_HEIGHT - dice_size - 80  # Adjusted position
+        y = self.BOARD_HEIGHT - dice_size  # Adjusted position
     
         for die in dice_to_draw:
             # Draw dice outline
@@ -700,11 +700,12 @@ class BackgammonGame:
         moves = list(move_sequence)  # Copy the move sequence
 
         def move_next():
-            nonlocal current_point  # Declare as nonlocal to modify the outer variable
+            nonlocal current_point, moves  # 'moves' is defined in this scope
             if not moves:
                 self.selected_point = None
                 self.valid_end_points = {}
-                if not self.moves_remaining:
+                has_moves = self.generate_all_possible_moves_player() if self.current_player == 1 else self.generate_all_possible_moves()
+                if not has_moves or not self.moves_remaining:
                     self.dice = []
                     self.draw_board()
                     self.end_turn()
@@ -720,6 +721,7 @@ class BackgammonGame:
                 current_point = 'bear_off'
 
         move_next()
+
         
     def get_new_point(self, current_point, move):
         if current_point == 'bar':
@@ -768,6 +770,7 @@ class BackgammonGame:
         def after_animation():
             # After animation, update game state
             self.make_move(from_point, to_pos, distance)
+            # No need to reference 'moves' here
             if callback:
                 callback()
         self.animate_move(from_pos, to_pos, piece, opponent_piece_id, opponent_bar_pos, after_animation)
@@ -826,6 +829,8 @@ class BackgammonGame:
             self.canvas.move(piece, dx, dy)
             self.canvas.after(20, lambda: animate_player_piece(step + 1))
 
+        animate_player_piece(1)
+         
         if opponent_piece_id:
             # Animate opponent's piece to the bar
             x_opponent_start = x_end
@@ -844,14 +849,14 @@ class BackgammonGame:
                     if opponent_bar_pos not in self.piece_ids:
                         self.piece_ids[opponent_bar_pos] = []
                     self.piece_ids[opponent_bar_pos].append(opponent_piece_id)
-                    animate_player_piece(1)
+                    #animate_player_piece(1)
                     return
                 self.canvas.move(opponent_piece_id, dx_opponent, dy_opponent)
                 self.canvas.after(20, lambda: move_opponent_piece(step + 1))
 
             move_opponent_piece(1)
-        else:
-            animate_player_piece(1)
+ 
+           
         
     def make_move(self, from_point, to_point, distance):
         if from_point == 'bar':
