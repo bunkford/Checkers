@@ -671,7 +671,7 @@ class CheckersGame:
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
             return  # It's not AI's turn
 
-        depth = 3  # Set the search depth (increase for more difficulty)
+        depth = 4  # Set the search depth (increase for more difficulty)
 
         best_move = None
         best_score = float('-inf')
@@ -737,7 +737,7 @@ class CheckersGame:
         if self.current_player != "BLACK" or self.opponent_type.get() != "AI":
             return  # It's not AI's turn
 
-        depth = 3  # Set the search depth (increase for more difficulty)
+        depth = 4  # Set the search depth (increase for more difficulty)
 
         jumps, _ = self.get_valid_moves(from_row, from_col)
         if not jumps:
