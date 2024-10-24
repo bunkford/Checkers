@@ -374,7 +374,7 @@ class BackgammonGame:
     def draw_dice(self):
         if not self.dice:  # If dice haven't been rolled yet, don't draw
             return
-    
+        
         # Adjusted size and position
         dice_size = 40
         dice_padding = 10
@@ -718,7 +718,7 @@ class BackgammonGame:
                 current_point = self.get_new_point(current_point, move)
             else:
                 current_point = 'bear_off'
-        
+
         move_next()
         
     def get_new_point(self, current_point, move):
@@ -749,12 +749,109 @@ class BackgammonGame:
                 to_pos = from_pos - distance
         if to_pos < 0 or to_pos > 23:
             to_pos = 'off_w' if self.current_player == 1 else 'off_b'
-        
+        # Check if the move will hit an opponent's piece
+        opponent_piece_id = None
+        opponent_bar_pos = None
+        if to_pos not in ['off_w', 'off_b']:
+            if self.board[to_pos] * self.current_player == -1:
+                # There is an opponent's piece to be hit
+                opponent_piece_id = self.piece_ids[to_pos][-1]  # Get the opponent's piece id
+                opponent_bar_pos = 'bar_w' if self.current_player == -1 else 'bar_b'
+                self.piece_ids[to_pos].pop()
+        # Remove the player's piece from its current position
+        if from_pos in self.piece_ids and self.piece_ids[from_pos]:
+            piece = self.piece_ids[from_pos].pop()
+        else:
+            piece = None  # Should not happen
+
         # Animate the move
-        self.animate_move(from_pos, to_pos, callback)
+        def after_animation():
+            # After animation, update game state
+            self.make_move(from_point, to_pos, distance)
+            if callback:
+                callback()
+        self.animate_move(from_pos, to_pos, piece, opponent_piece_id, opponent_bar_pos, after_animation)
         
-        # Update game state
-        self.make_move(from_point, to_pos, distance)
+    def animate_move(self, from_point, to_point, piece, opponent_piece_id=None, opponent_bar_pos=None, callback=None):
+        # Determine start and end positions for the player's piece
+        if from_point == 'bar_w':
+            x_start = self.BOARD_WIDTH / 2
+            y_start = self.BOARD_HEIGHT / 2 + 50 + (len(self.piece_ids['bar_w'])) * 1.8 * (self.CHECKER_RADIUS + 4)
+        elif from_point == 'bar_b':
+            x_start = self.BOARD_WIDTH / 2
+            y_start = self.BOARD_HEIGHT / 2 - 50 - (len(self.piece_ids['bar_b'])) * 1.8 * (self.CHECKER_RADIUS + 4)
+        else:
+            x_start = self.get_point_x(from_point) + self.POINT_WIDTH / 2
+            stack_height = len(self.piece_ids[from_point]) + 1  # +1 because we've already popped the piece
+            if from_point < 12:
+                y_start = 70 + (stack_height - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
+            else:
+                y_start = self.BOARD_HEIGHT - 70 - (stack_height - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
+    
+        if to_point == 'off_w':
+            x_end = self.BOARD_WIDTH - 50
+            y_end = self.BOARD_HEIGHT / 2 + 50 + len(self.piece_ids.get('off_w', [])) * 1.8 * (self.CHECKER_RADIUS + 4)
+        elif to_point == 'off_b':
+            x_end = 50
+            y_end = self.BOARD_HEIGHT / 2 - 50 - len(self.piece_ids.get('off_b', [])) * 1.8 * (self.CHECKER_RADIUS + 4)
+        elif to_point == 'bar_w':
+            x_end = self.BOARD_WIDTH / 2
+            y_end = self.BOARD_HEIGHT / 2 + 50 + (len(self.piece_ids.get('bar_w', []))) * 1.8 * (self.CHECKER_RADIUS + 4)
+        elif to_point == 'bar_b':
+            x_end = self.BOARD_WIDTH / 2
+            y_end = self.BOARD_HEIGHT / 2 - 50 - (len(self.piece_ids.get('bar_b', []))) * 1.8 * (self.CHECKER_RADIUS + 4)
+        else:
+            x_end = self.get_point_x(to_point) + self.POINT_WIDTH / 2
+            stack_height = len(self.piece_ids.get(to_point, []))
+            if to_point < 12:
+                y_end = 70 + stack_height * 1.8 * (self.CHECKER_RADIUS + 4)
+            else:
+                y_end = self.BOARD_HEIGHT - 70 - stack_height * 1.8 * (self.CHECKER_RADIUS + 4)
+    
+        dx = (x_end - x_start) / 20
+        dy = (y_end - y_start) / 20
+        steps = 20
+        self.animating = True
+
+        def animate_player_piece(step):
+            if step > steps:
+                self.animating = False
+                # Update piece IDs
+                if to_point not in self.piece_ids:
+                    self.piece_ids[to_point] = []
+                self.piece_ids[to_point].append(piece)
+                if callback:
+                    callback()
+                return
+            self.canvas.move(piece, dx, dy)
+            self.canvas.after(20, lambda: animate_player_piece(step + 1))
+
+        if opponent_piece_id:
+            # Animate opponent's piece to the bar
+            x_opponent_start = x_end
+            y_opponent_start = y_end
+            x_bar = self.BOARD_WIDTH / 2
+            if opponent_bar_pos == 'bar_w':
+                y_bar = self.BOARD_HEIGHT / 2 + 50 + len(self.piece_ids.get('bar_w', [])) * 1.8 * (self.CHECKER_RADIUS + 4)
+            else:
+                y_bar = self.BOARD_HEIGHT / 2 - 50 - len(self.piece_ids.get('bar_b', [])) * 1.8 * (self.CHECKER_RADIUS + 4)
+            dx_opponent = (x_bar - x_opponent_start) / 20
+            dy_opponent = (y_bar - y_opponent_start) / 20
+
+            def move_opponent_piece(step):
+                if step > steps:
+                    # After moving opponent's piece, update piece IDs
+                    if opponent_bar_pos not in self.piece_ids:
+                        self.piece_ids[opponent_bar_pos] = []
+                    self.piece_ids[opponent_bar_pos].append(opponent_piece_id)
+                    animate_player_piece(1)
+                    return
+                self.canvas.move(opponent_piece_id, dx_opponent, dy_opponent)
+                self.canvas.after(20, lambda: move_opponent_piece(step + 1))
+
+            move_opponent_piece(1)
+        else:
+            animate_player_piece(1)
         
     def make_move(self, from_point, to_point, distance):
         if from_point == 'bar':
@@ -764,7 +861,7 @@ class BackgammonGame:
                 from_pos = 'bar_b'
         else:
             from_pos = from_point
-        
+
         if to_point == 'off_w' or to_point == 'off_b':
             # Remove piece from board
             if from_pos != 'bar_w' and from_pos != 'bar_b':
@@ -782,93 +879,26 @@ class BackgammonGame:
             if self.bear_off[self.current_player] == 15:
                 self.game_over()
             return
-        
+
         # Move piece
-        if self.board[to_point] * self.current_player == -1:
-            # Send opponent's piece to bar
-            # Remove opponent's piece from board
-            opponent_piece_id = self.piece_ids[to_point].pop()
-            self.canvas.delete(opponent_piece_id)
-            self.board[to_point] = self.current_player
-            self.bar[-self.current_player] += 1
-            # Add opponent's piece to bar
-            bar_key = 'bar_w' if self.current_player == -1 else 'bar_b'
-            self.piece_ids[bar_key].append(opponent_piece_id)
-        else:
+        if to_point not in ['bar_w', 'bar_b']:
+            if self.board[to_point] * self.current_player == -1:
+                # Send opponent's piece to bar
+                # Remove opponent's piece from board
+                self.board[to_point] = 0  # Remove opponent's piece from board
+                self.bar[-self.current_player] += 1
             self.board[to_point] += self.current_player
-        
+
         if from_pos != 'bar_w' and from_pos != 'bar_b':
             self.board[from_pos] -= self.current_player
         else:
             self.bar[self.current_player] -= 1
-        
+
         self.moves_remaining.remove(distance)
-        
+
         # Check for win
         if self.bear_off[self.current_player] == 15:
             self.game_over()
-        
-    def animate_move(self, from_point, to_point, callback=None):
-        # Determine start and end positions
-        if from_point == 'bar_w':
-            x_start = self.BOARD_WIDTH / 2
-            y_start = self.BOARD_HEIGHT / 2 + 50 + (len(self.piece_ids['bar_w']) - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
-        elif from_point == 'bar_b':
-            x_start = self.BOARD_WIDTH / 2
-            y_start = self.BOARD_HEIGHT / 2 - 50 - (len(self.piece_ids['bar_b']) - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
-        else:
-            x_start = self.get_point_x(from_point) + self.POINT_WIDTH / 2
-            stack_height = len(self.piece_ids[from_point])
-            if from_point < 12:
-                y_start = 70 + (stack_height - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
-            else:
-                y_start = self.BOARD_HEIGHT - 70 - (stack_height - 1) * 1.8 * (self.CHECKER_RADIUS + 4)
-    
-        if to_point == 'off_w':
-            x_end = self.BOARD_WIDTH - 50
-            y_end = self.BOARD_HEIGHT / 2 + 50 + len(self.piece_ids['off_w']) * 1.8 * (self.CHECKER_RADIUS + 4)
-        elif to_point == 'off_b':
-            x_end = 50
-            y_end = self.BOARD_HEIGHT / 2 - 50 - len(self.piece_ids['off_b']) * 1.8 * (self.CHECKER_RADIUS + 4)
-        elif to_point == 'bar_w':
-            x_end = self.BOARD_WIDTH / 2
-            y_end = self.BOARD_HEIGHT / 2 + 50 + (len(self.piece_ids['bar_w'])) * 1.8 * (self.CHECKER_RADIUS + 4)
-        elif to_point == 'bar_b':
-            x_end = self.BOARD_WIDTH / 2
-            y_end = self.BOARD_HEIGHT / 2 - 50 - (len(self.piece_ids['bar_b'])) * 1.8 * (self.CHECKER_RADIUS + 4)
-        else:
-            x_end = self.get_point_x(to_point) + self.POINT_WIDTH / 2
-            stack_height = len(self.piece_ids.get(to_point, []))
-            if to_point < 12:
-                y_end = 70 + stack_height * 1.8 * (self.CHECKER_RADIUS + 4)
-            else:
-                y_end = self.BOARD_HEIGHT - 70 - stack_height * 1.8 * (self.CHECKER_RADIUS + 4)
-    
-        # Get the piece to move
-        if from_point in ['bar_w', 'bar_b']:
-            piece = self.piece_ids[from_point].pop()
-        else:
-            piece = self.piece_ids[from_point].pop()
-    
-        dx = (x_end - x_start) / 20
-        dy = (y_end - y_start) / 20
-        steps = 20
-        self.animating = True
-        
-        def move_step(step):
-            if step > steps:
-                self.animating = False
-                # Update piece IDs
-                if to_point not in self.piece_ids:
-                    self.piece_ids[to_point] = []
-                self.piece_ids[to_point].append(piece)
-                if callback:
-                    callback()
-                return
-            self.canvas.move(piece, dx, dy)
-            self.canvas.after(20, lambda: move_step(step + 1))
-        
-        move_step(1)
         
     def game_over(self):
         winner = 'White' if self.current_player == 1 else 'Black'
