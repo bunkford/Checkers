@@ -13,7 +13,16 @@ class PacmanGame:
         self.GRID_HEIGHT = 21
         self.GAME_WIDTH = self.GRID_WIDTH * self.CELL_SIZE
         self.GAME_HEIGHT = self.GRID_HEIGHT * self.CELL_SIZE
-        self.BASE_SPEED = 100  # Movement speed in milliseconds
+        self.BASE_SPEED = 250  # Slower speed (was 100)
+        self.GHOST_JAIL_TIME = 5000  # Time in ms that ghosts stay in jail
+        self.GHOST_RELEASE_DELAY = 2000  # Time between releasing each ghost
+        self.jailed_ghosts = {}  # Track jailed ghosts and their release timers
+        self.POWER_DURATION = 10000  # 10 seconds total
+        self.BLINK_START = 7000      # Start blinking after 7 seconds
+        self.BLINK_SPEED = 200       # Blink every 200ms
+        self.power_time = 0          # Track how long power mode has been active
+        self.blink_state = False     # Track blink state
+        self.ghost_release_queue = []  # Queue for ghosts waiting to be released
         
         # Colors
         self.COLORS = {
@@ -71,7 +80,7 @@ class PacmanGame:
         # Make window non-resizable
         self.root.resizable(False, False)
         
-        # Define the maze layout
+        # Define the maze layout with proper ghost house and exit
         self.MAZE = [
             "WWWWWWWWWWWWWWWWWWW",
             "W........W........W",
@@ -80,12 +89,12 @@ class PacmanGame:
             "W.WW.W.WWWWW.W.WW.W",
             "W....W...W...W....W",
             "WWWW.WWW W WWW.WWWW",
-            "   W.W   G   W.W   ",
-            "WWWW.W WW-WW W.WWWW",
-            "    .  WgggW  .    ",
-            "WWWW.W WWWWW W.WWWW",
             "   W.W       W.W   ",
             "WWWW.W WWWWW W.WWWW",
+            "    .  WgggW  .    ",
+            "WWWW.W WgGgW W.WWWW",
+            "   W.W WgggW W.W   ",
+            "WWWW.W W   W W.WWWW",  # Changed: Clear path in middle
             "W........W........W",
             "W.WW.WWW.W.WWW.WW.W",
             "Wp..W.....P.....W.W",
@@ -111,6 +120,11 @@ class PacmanGame:
         game_menu.add_command(label="Quit", command=self.root.quit)
     
     def reset_game(self):
+        # Cancel any existing jail timers
+        for timer_id in self.jailed_ghosts.values():
+            self.root.after_cancel(timer_id)
+        self.jailed_ghosts = {}
+        
         self.game_over = False
         self.paused = False
         self.score = 0
@@ -118,6 +132,8 @@ class PacmanGame:
         self.level = 1
         self.power_mode = False
         self.power_timer = None
+        self.power_time = 0
+        self.blink_state = False
         
         # Initialize game grid
         self.grid = []
@@ -140,19 +156,27 @@ class PacmanGame:
                     self.dots_left += 1
                     grid_row.append('power')
                 elif cell == 'G':
-                    grid_row.append('empty')
+                    grid_row.append('ghost_house')
                     self.ghost_start = [len(self.grid), len(grid_row)]
+                elif cell == 'g':
+                    grid_row.append('ghost_house')
+                elif cell == 'd':
+                    grid_row.append('door')  # New cell type for doorway
                 else:
                     grid_row.append('empty')
             self.grid.append(grid_row)
         
-        # Initialize ghosts
+        # Initialize ghosts with better starting positions inside ghost house
         self.ghosts = [
-            {'pos': self.ghost_start[:], 'direction': [0, 0], 'color': 'blinky', 'mode': 'scatter'},
-            {'pos': self.ghost_start[:], 'direction': [0, 0], 'color': 'pinky', 'mode': 'scatter'},
-            {'pos': self.ghost_start[:], 'direction': [0, 0], 'color': 'inky', 'mode': 'scatter'},
-            {'pos': self.ghost_start[:], 'direction': [0, 0], 'color': 'clyde', 'mode': 'scatter'}
+            {'pos': [self.ghost_start[0], self.ghost_start[1]-1], 'direction': [0, 0], 'color': 'blinky', 'mode': 'house'},
+            {'pos': [self.ghost_start[0], self.ghost_start[1]+1], 'direction': [0, 0], 'color': 'pinky', 'mode': 'house'},
+            {'pos': [self.ghost_start[0]-1, self.ghost_start[1]], 'direction': [0, 0], 'color': 'inky', 'mode': 'house'},
+            {'pos': [self.ghost_start[0]+1, self.ghost_start[1]], 'direction': [0, 0], 'color': 'clyde', 'mode': 'house'}
         ]
+        
+        # Set up release sequence
+        self.ghost_release_queue = self.ghosts.copy()
+        self.root.after(self.GHOST_RELEASE_DELAY, self.release_next_ghost)
         
         self.update_labels()
     
@@ -183,6 +207,9 @@ class PacmanGame:
             self.pacman_pos[1] + self.next_direction[1]
         ]
         
+        # Check for tunnel first
+        next_pos = self.handle_tunnel(next_pos)
+        
         if (0 <= next_pos[0] < self.GRID_HEIGHT and 
             0 <= next_pos[1] < self.GRID_WIDTH and 
             self.grid[next_pos[0]][next_pos[1]] != 'wall'):
@@ -193,6 +220,9 @@ class PacmanGame:
             self.pacman_pos[0] + self.pacman_direction[0],
             self.pacman_pos[1] + self.pacman_direction[1]
         ]
+        
+        # Check for tunnel again
+        next_pos = self.handle_tunnel(next_pos)
         
         if (0 <= next_pos[0] < self.GRID_HEIGHT and 
             0 <= next_pos[1] < self.GRID_WIDTH and 
@@ -212,9 +242,12 @@ class PacmanGame:
     
     def activate_power_mode(self):
         self.power_mode = True
+        self.power_time = 0  # Reset power time
+        self.blink_state = False
+        
         if self.power_timer:
             self.root.after_cancel(self.power_timer)
-        self.power_timer = self.root.after(10000, self.end_power_mode)
+        self.power_timer = self.root.after(self.POWER_DURATION, self.end_power_mode)
         
         for ghost in self.ghosts:
             if ghost['mode'] != 'eaten':
@@ -229,36 +262,96 @@ class PacmanGame:
     
     def move_ghosts(self):
         for ghost in self.ghosts:
-            if ghost['mode'] == 'eaten':
-                # Move towards ghost house
-                target = self.ghost_start
-            elif ghost['mode'] == 'scatter':
-                # Move towards corner
-                target = [0, 0]  # Simplified targeting
-            else:  # chase or scared
-                target = self.pacman_pos
+            if ghost['mode'] == 'jailed':
+                # Keep ghost in jail
+                ghost['pos'] = [self.ghost_start[0], self.ghost_start[1]]
+                ghost['direction'] = [0, 0]
+                continue
             
-            # Simple pathfinding
-            possible_moves = []
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                new_pos = [ghost['pos'][0] + dx, ghost['pos'][1] + dy]
-                if (0 <= new_pos[0] < self.GRID_HEIGHT and 
-                    0 <= new_pos[1] < self.GRID_WIDTH and 
-                    self.grid[new_pos[0]][new_pos[1]] != 'wall'):
-                    if ghost['mode'] == 'scared':
-                        possible_moves.append([dx, dy])
-                    else:
-                        dist = math.hypot(target[0] - new_pos[0], target[1] - new_pos[1])
-                        possible_moves.append(([dx, dy], dist))
-            
-            if possible_moves:
-                if ghost['mode'] == 'scared':
-                    ghost['direction'] = random.choice(possible_moves)
-                else:
-                    ghost['direction'] = min(possible_moves, key=lambda x: x[1])[0]
+            if ghost['mode'] == 'house':
+                # Move to exit position when in house mode
+                exit_pos = [self.ghost_start[0] - 2, self.ghost_start[1]]  # Position above ghost house
                 
-                ghost['pos'][0] += ghost['direction'][0]
-                ghost['pos'][1] += ghost['direction'][1]
+                # First move to center if not there
+                if ghost['pos'][1] != self.ghost_start[1]:
+                    if ghost['pos'][1] < self.ghost_start[1]:
+                        ghost['pos'][1] += 1
+                    else:
+                        ghost['pos'][1] -= 1
+                # Then move up
+                elif ghost['pos'][0] > exit_pos[0]:
+                    ghost['pos'][0] -= 1
+                else:
+                    ghost['mode'] = 'scatter'  # Switch to scatter mode once at exit
+                continue
+            
+            # If ghost is in ghost house area but not in house mode, move upward to exit
+            if self.grid[ghost['pos'][0]][ghost['pos'][1]] == 'ghost_house':
+                next_pos = [ghost['pos'][0] - 1, ghost['pos'][1]]
+                if self.is_valid_move(next_pos):
+                    ghost['pos'] = next_pos
+                    ghost['direction'] = [-1, 0]
+                    continue
+            
+            if ghost['direction'] == [0, 0]:
+                # Ghost needs a new direction
+                possible_moves = self.get_possible_moves(ghost['pos'])
+                if possible_moves:
+                    ghost['direction'] = random.choice(possible_moves)
+            else:
+                # Continue in current direction until hitting a wall
+                next_pos = [
+                    ghost['pos'][0] + ghost['direction'][0],
+                    ghost['pos'][1] + ghost['direction'][1]
+                ]
+                
+                # Handle tunnel movement for ghosts
+                next_pos = self.handle_tunnel(next_pos)
+                
+                # Check if next position is valid
+                if self.is_valid_move(next_pos):
+                    ghost['pos'] = next_pos
+                    
+                    # Check if at intersection
+                    possible_moves = self.get_possible_moves(ghost['pos'])
+                    if len(possible_moves) > 2:  # More than 2 options means it's an intersection
+                        # 30% chance to change direction at intersection
+                        if random.random() < 0.3:
+                            # Remove opposite of current direction to prevent reversing
+                            opposite = [-ghost['direction'][0], -ghost['direction'][1]]
+                            possible_moves.remove(opposite) if opposite in possible_moves else None
+                            ghost['direction'] = random.choice(possible_moves)
+                else:
+                    # Hit a wall, choose new direction
+                    possible_moves = self.get_possible_moves(ghost['pos'])
+                    if possible_moves:
+                        # Remove opposite of current direction to prevent reversing
+                        opposite = [-ghost['direction'][0], -ghost['direction'][1]]
+                        possible_moves.remove(opposite) if opposite in possible_moves else None
+                        ghost['direction'] = random.choice(possible_moves) if possible_moves else [0, 0]
+    
+    def get_possible_moves(self, pos):
+        possible_moves = []
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            new_pos = [pos[0] + dx, pos[1] + dy]
+            if self.is_valid_move(new_pos):
+                possible_moves.append([dx, dy])
+        return possible_moves
+    
+    def is_valid_move(self, pos):
+        # Handle tunnel positions
+        if pos[0] == 9:  # Tunnel row
+            if pos[1] < 0 or pos[1] >= self.GRID_WIDTH:  # In tunnel
+                return True
+        
+        if (0 <= pos[0] < self.GRID_HEIGHT and 
+            0 <= pos[1] < self.GRID_WIDTH):
+            cell = self.grid[pos[0]][pos[1]]
+            # Ghosts can move through doors and ghost house, Pac-Man cannot
+            if cell == 'ghost_house' or cell == 'door':
+                return isinstance(self, dict)  # True for ghosts (passed as dict), False for Pac-Man
+            return cell != 'wall'
+        return False
     
     def check_collisions(self):
         for ghost in self.ghosts:
@@ -266,7 +359,10 @@ class PacmanGame:
                 if ghost['mode'] == 'scared':
                     ghost['mode'] = 'eaten'
                     self.score += 200
-                else:
+                    # Send ghost to jail
+                    ghost['pos'] = self.ghost_start[:]
+                    self.jail_ghost(ghost)
+                elif ghost['mode'] != 'jailed':  # Don't collide while in jail
                     self.lives -= 1
                     if self.lives <= 0:
                         self.game_over = True
@@ -289,6 +385,9 @@ class PacmanGame:
                 cell = self.grid[row][col]
                 if cell == 'wall':
                     self.canvas.create_rectangle(x1, y1, x2, y2, fill=self.COLORS['wall'], outline="")
+                elif cell == 'door':
+                    # Draw doorway as a thin line
+                    self.canvas.create_line(x1, y1, x2, y1, fill=self.COLORS['wall'], width=2)
                 elif cell == 'dot':
                     self.canvas.create_oval(x1+12, y1+12, x2-12, y2-12, fill=self.COLORS['dot'])
                 elif cell == 'power':
@@ -303,12 +402,69 @@ class PacmanGame:
         
         # Draw ghosts
         for ghost in self.ghosts:
-            x1 = ghost['pos'][1] * self.CELL_SIZE
-            y1 = ghost['pos'][0] * self.CELL_SIZE
-            x2 = x1 + self.CELL_SIZE
-            y2 = y1 + self.CELL_SIZE
-            color = self.COLORS['scared'] if ghost['mode'] == 'scared' else self.COLORS[ghost['color']]
-            self.canvas.create_oval(x1+2, y1+2, x2-2, y2-2, fill=color)
+            x = ghost['pos'][1] * self.CELL_SIZE
+            y = ghost['pos'][0] * self.CELL_SIZE
+            
+            # Determine ghost color based on mode and blink state
+            if ghost['mode'] == 'scared':
+                if self.power_time >= self.BLINK_START:
+                    # Blink between scared and normal color
+                    color = self.COLORS[ghost['color']] if self.blink_state else self.COLORS['scared']
+                else:
+                    color = self.COLORS['scared']
+            else:
+                color = self.COLORS[ghost['color']]
+            
+            # Draw ghost body (slightly taller than cell)
+            self.canvas.create_arc(
+                x + 2, y + 2,
+                x + self.CELL_SIZE - 2, y + self.CELL_SIZE - 2,
+                start=0, extent=180,
+                fill=color
+            )
+            self.canvas.create_rectangle(
+                x + 2, y + self.CELL_SIZE//2,
+                x + self.CELL_SIZE - 2, y + self.CELL_SIZE - 2,
+                fill=color, outline=color
+            )
+            
+            # Draw wavy bottom
+            wave_points = [
+                x + 2,                    y + self.CELL_SIZE - 2,  # Start
+                x + self.CELL_SIZE//4,    y + self.CELL_SIZE - 8,  # First valley
+                x + self.CELL_SIZE//2,    y + self.CELL_SIZE - 2,  # Middle peak
+                x + 3*self.CELL_SIZE//4,  y + self.CELL_SIZE - 8,  # Second valley
+                x + self.CELL_SIZE - 2,   y + self.CELL_SIZE - 2   # End
+            ]
+            self.canvas.create_line(wave_points, fill=color, width=2, smooth=True)
+            
+            # Draw eyes
+            eye_color = "white" if ghost['mode'] != 'scared' else self.COLORS['scared']
+            pupil_color = "blue" if ghost['mode'] == 'scared' else "black"
+            
+            # Left eye
+            self.canvas.create_oval(
+                x + 7, y + 8,
+                x + 13, y + 14,
+                fill=eye_color, outline=eye_color
+            )
+            self.canvas.create_oval(
+                x + 9, y + 9,
+                x + 12, y + 12,
+                fill=pupil_color
+            )
+            
+            # Right eye
+            self.canvas.create_oval(
+                x + 17, y + 8,
+                x + 23, y + 14,
+                fill=eye_color, outline=eye_color
+            )
+            self.canvas.create_oval(
+                x + 19, y + 9,
+                x + 22, y + 12,
+                fill=pupil_color
+            )
         
         # Draw messages
         if self.game_over:
@@ -337,6 +493,14 @@ class PacmanGame:
             self.check_collisions()
             self.update_labels()
             
+            # Update power mode timing and blinking
+            if self.power_mode:
+                self.power_time += self.BASE_SPEED
+                if self.power_time >= self.BLINK_START:
+                    # Toggle blink state
+                    if self.power_time % self.BLINK_SPEED < self.BASE_SPEED:
+                        self.blink_state = not self.blink_state
+            
             # Check for level completion
             if self.dots_left == 0:
                 self.level += 1
@@ -347,6 +511,34 @@ class PacmanGame:
     
     def run(self):
         self.root.mainloop()
+    
+    def jail_ghost(self, ghost):
+        ghost['mode'] = 'house'  # Change to house mode instead of jailed
+        ghost['pos'] = [self.ghost_start[0], self.ghost_start[1]]  # Place in center
+        timer_id = self.root.after(self.GHOST_JAIL_TIME, lambda: self.release_ghost(ghost))
+        self.jailed_ghosts[ghost['color']] = timer_id
+    
+    def release_ghost(self, ghost):
+        if ghost['color'] in self.jailed_ghosts:
+            del self.jailed_ghosts[ghost['color']]
+        ghost['mode'] = 'house'  # Set to house mode to trigger exit behavior
+    
+    def handle_tunnel(self, pos):
+        # Check for tunnel positions (row 9 in the maze)
+        if pos[0] == 9:  # Tunnel row
+            if pos[1] < 0:  # Left tunnel
+                return [pos[0], self.GRID_WIDTH - 1]
+            elif pos[1] >= self.GRID_WIDTH:  # Right tunnel
+                return [pos[0], 0]
+        return pos
+    
+    def release_next_ghost(self):
+        if self.ghost_release_queue and not self.game_over and not self.paused:
+            ghost = self.ghost_release_queue.pop(0)
+            ghost['mode'] = 'scatter'
+            # Schedule next ghost release
+            if self.ghost_release_queue:
+                self.root.after(self.GHOST_RELEASE_DELAY, self.release_next_ghost)
 
 if __name__ == "__main__":
     game = PacmanGame()
