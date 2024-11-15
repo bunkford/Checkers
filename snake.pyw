@@ -187,6 +187,8 @@ class SnakeGame:
             new_head[1] >= self.GAME_HEIGHT // self.CELL_SIZE or
             new_head in self.snake):
             self.game_over = True
+            # Enable level menu when game ends
+            self.set_level_menu_state('normal')
             return
         
         # Add new head
@@ -275,20 +277,13 @@ class SnakeGame:
             if self.blue_food_timer:
                 self.root.after_cancel(self.blue_food_timer)
             self.blue_food_timer = None
+            # Disable level menu when starting game
+            self.set_level_menu_state('disabled')
     
     def update(self):
         if not self.game_over and not self.paused:
             self.move_snake()
             self.spawn_blue_food()  # Chance to spawn blue food each update
-            
-            # Disable level menu during gameplay
-            for i in range(self.level_menu.index('end') + 1):
-                self.level_menu.entryconfigure(i, state='disabled')
-        else:
-            # Enable level menu when game is over
-            for i in range(self.level_menu.index('end') + 1):
-                self.level_menu.entryconfigure(i, state='normal')
-                
         self.draw()
         self.root.after(self.SPEED, self.update)
     
@@ -303,6 +298,11 @@ class SnakeGame:
             self.reset_game(event)
         elif event.keysym in ['Left', 'Right', 'Up', 'Down']:
             self.change_direction(event.keysym)
+    
+    def set_level_menu_state(self, state):
+        """Helper method to set the state of all level menu items"""
+        for i in range(self.level_menu.index('end') + 1):
+            self.level_menu.entryconfigure(i, state=state)
 
 if __name__ == "__main__":
     game = SnakeGame()

@@ -717,6 +717,7 @@ class BackgammonGame:
             self.roll_button_id = None
             self.roll_button_text = None
         
+        # If it's AI's turn
         if self.current_player == -1 and self.opponent_type == 'AI':
             self.roll_dice()  # Roll dice automatically for AI
             # Check if AI has valid moves before proceeding
@@ -726,7 +727,9 @@ class BackgammonGame:
                 message = "AI has no available moves and skips the turn."
                 print(message)
                 self.status_bar.config(text=message)
-                self.root.after(1500, lambda: self.end_turn())  # Use lambda to prevent immediate execution
+                # Change back to player's turn
+                self.current_player = 1
+                self.root.after(1500, self.draw_roll_button)
         else:
             # Human player's turn
             self.draw_roll_button()  # Draw the roll button first
