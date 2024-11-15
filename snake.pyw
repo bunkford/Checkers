@@ -10,12 +10,12 @@ class SnakeGame:
         self.GAME_WIDTH = 600
         self.GAME_HEIGHT = 400
         self.CELL_SIZE = 20
-        self.BASE_SPEED = 200  # Base speed (level 1)
+        self.BASE_SPEED = 100  # Faster base speed (was 200)
         self.level = 1
         self.paused = False
         
-        # Calculate speed based on level
-        self.SPEED = self.BASE_SPEED - (self.level - 1) * 15
+        # Calculate speed based on level with smaller increments
+        self.SPEED = self.BASE_SPEED - (self.level - 1) * 8  # Smaller speed reduction per level (was 15)
         
         # Game state
         self.snake = [(5, 5), (4, 5), (3, 5)]  # Head is first element
@@ -30,6 +30,10 @@ class SnakeGame:
         self.blue_food_timer = None
         self.BLUE_FOOD_DURATION = 3000  # Duration in milliseconds (3 seconds)
         self.BLUE_FOOD_CHANCE = 0.02    # 2% chance per update to spawn blue food
+        
+        # Add movement buffer for smoother direction changes
+        self.direction_buffer = []  # Store queued direction changes
+        self.BUFFER_MAX = 3  # Maximum number of buffered moves
         
         # Create menu
         self.create_menu()
@@ -97,7 +101,7 @@ class SnakeGame:
     def set_level(self, level):
         if self.game_over:  # Only allow level change when game is over
             self.level = level
-            self.SPEED = self.BASE_SPEED - (level - 1) * 15
+            self.SPEED = self.BASE_SPEED - (level - 1) * 8  # Adjust speed increment (was 15)
             self.level_label.config(text=f"Level: {self.level}")
         else:
             print("Cannot change level during gameplay")  # Debug print
@@ -138,8 +142,21 @@ class SnakeGame:
             "Up": "Down",
             "Down": "Up"
         }
-        if opposites[new_direction] != self.direction:
-            self.next_direction = new_direction
+        
+        # Don't add if buffer is full
+        if len(self.direction_buffer) >= self.BUFFER_MAX:
+            return
+        
+        # Don't add if it's the same as the last buffered direction
+        if self.direction_buffer and new_direction == self.direction_buffer[-1]:
+            return
+        
+        # Get the direction to check against
+        current = self.direction_buffer[-1] if self.direction_buffer else self.direction
+        
+        # Only add valid moves to the buffer
+        if opposites[new_direction] != current:
+            self.direction_buffer.append(new_direction)
     
     def spawn_blue_food(self):
         if self.blue_food is None and not self.game_over and not self.paused:
@@ -166,9 +183,13 @@ class SnakeGame:
     def move_snake(self):
         if self.paused:
             return
-            
+        
+        # Process the next buffered direction if available
+        if self.direction_buffer:
+            self.direction = self.direction_buffer.pop(0)
+            self.next_direction = self.direction
+        
         head = self.snake[0]
-        self.direction = self.next_direction
         
         # Calculate new head position
         if self.direction == "Left":
