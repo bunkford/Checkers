@@ -37,10 +37,6 @@ class BackgammonGame:
         self.opponent_type = 'AI'  # Default to AI
         self.ai_skill_level = 'Beginner'  # Default to Beginner
         
-        # Undo/Redo stacks
-        self.undo_stack = []
-        self.redo_stack = []
-        
         # Create menu
         self.create_menu()
         
@@ -101,16 +97,6 @@ class BackgammonGame:
                                      command=lambda: self.set_ai_skill('Advanced'))
         self.menubar.add_cascade(label="AI Skill Level", menu=self.ai_menu)
         
-        # Add Edit menu for Undo/Redo
-        edit_menu = tk.Menu(self.menubar, tearoff=0)
-        edit_menu.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
-        edit_menu.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
-        self.menubar.add_cascade(label="Edit", menu=edit_menu)
-        
-        # Bind keyboard shortcuts
-        self.root.bind('<Control-z>', lambda e: self.undo())
-        self.root.bind('<Control-y>', lambda e: self.redo())
-        
         self.root.config(menu=self.menubar)
         
     def set_opponent(self, opponent_type):
@@ -164,10 +150,6 @@ class BackgammonGame:
         return board
         
     def new_game(self):
-        # Clear undo/redo stacks
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        
         # Reset the game state
         self.board = self.initialize_board()
         self.current_player = None
@@ -548,11 +530,10 @@ class BackgammonGame:
     
         # Check if this is the initial roll or first turn
         is_initial_roll = self.current_player is None
-        is_first_turn = len(self.undo_stack) == 0
     
         for i, die in enumerate(dice_to_draw):
-            if is_initial_roll or is_first_turn:
-                # For initial roll and first turn: first die white, second die black
+            if is_initial_roll:
+                # For initial roll: first die white, second die black
                 dice_color = "white" if i == 0 else "black"
                 dot_color = "black" if i == 0 else "white"
             else:
@@ -1301,9 +1282,6 @@ class BackgammonGame:
  
            
     def make_move(self, from_point, to_point, distance):
-        # Save current state before making the move
-        self.save_game_state()
-        
         if from_point == 'bar':
             if self.current_player == 1:
                 from_pos = 'bar_w'
@@ -1514,104 +1492,6 @@ class BackgammonGame:
         
     def run(self):
         self.root.mainloop()
-
-    def save_game_state(self):
-        """Save current game state to undo stack"""
-        state = {
-            'board': self.board.copy(),
-            'current_player': self.current_player,
-            'dice': self.dice.copy() if self.dice else [],
-            'moves_remaining': self.moves_remaining.copy() if self.moves_remaining else [],
-            'bar': self.bar.copy(),
-            'bear_off': self.bear_off.copy(),
-            'selected_point': self.selected_point,
-            'valid_end_points': self.valid_end_points.copy()
-        }
-        self.undo_stack.append(state)
-        self.redo_stack.clear()  # Clear redo stack when new move is made
-
-    def restore_game_state(self, state):
-        """Restore game state from saved state"""
-        self.board = state['board'].copy()
-        self.current_player = state['current_player']
-        self.dice = state['dice'].copy()
-        self.moves_remaining = state['moves_remaining'].copy()
-        self.bar = state['bar'].copy()
-        self.bear_off = state['bear_off'].copy()
-        self.selected_point = state['selected_point']
-        self.valid_end_points = state['valid_end_points'].copy()
-        
-        # Redraw the board
-        self.draw_board()
-        
-        # Update status and controls based on whose turn it is
-        if self.current_player == 1:
-            if self.moves_remaining:
-                message = "Your turn. Make a move."
-            else:
-                message = "Your turn. Click 'Roll Dice' to begin."
-                self.draw_roll_button()
-            self.status_bar.config(text=message)
-        elif self.current_player == -1 and self.opponent_type == 'AI':
-            message = "AI's turn"
-            self.status_bar.config(text=message)
-            # Don't trigger AI moves after undo/redo
-
-    def undo(self):
-        """Undo last move"""
-        if len(self.undo_stack) > 0:
-            # Save current state to redo stack
-            current_state = {
-                'board': self.board.copy(),
-                'current_player': self.current_player,
-                'dice': self.dice.copy() if self.dice else [],
-                'moves_remaining': self.moves_remaining.copy() if self.moves_remaining else [],
-                'bar': self.bar.copy(),
-                'bear_off': self.bear_off.copy(),
-                'selected_point': self.selected_point,
-                'valid_end_points': self.valid_end_points.copy()
-            }
-            self.redo_stack.append(current_state)
-            
-            # Restore previous state
-            previous_state = self.undo_stack.pop()
-            self.restore_game_state(previous_state)
-            
-            message = "Move undone"
-            print(message)
-            self.status_bar.config(text=message)
-            
-            # Clear any pending AI moves
-            for after_id in self.root.tk.call('after', 'info'):
-                self.root.after_cancel(int(after_id))
-
-    def redo(self):
-        """Redo previously undone move"""
-        if len(self.redo_stack) > 0:
-            # Save current state to undo stack
-            current_state = {
-                'board': self.board.copy(),
-                'current_player': self.current_player,
-                'dice': self.dice.copy() if self.dice else [],
-                'moves_remaining': self.moves_remaining.copy() if self.moves_remaining else [],
-                'bar': self.bar.copy(),
-                'bear_off': self.bear_off.copy(),
-                'selected_point': self.selected_point,
-                'valid_end_points': self.valid_end_points.copy()
-            }
-            self.undo_stack.append(current_state)
-            
-            # Restore next state
-            next_state = self.redo_stack.pop()
-            self.restore_game_state(next_state)
-            
-            message = "Move redone"
-            print(message)
-            self.status_bar.config(text=message)
-            
-            # Clear any pending AI moves
-            for after_id in self.root.tk.call('after', 'info'):
-                self.root.after_cancel(int(after_id))
 
 if __name__ == "__main__":
     game = BackgammonGame()
